@@ -47,7 +47,7 @@ def pick_model(model: ModelSelection) -> Tuple[HuggingFaceModelReference, ModelT
     else:
         name = model.value.replace("_", "-")
         return (
-            HuggingFaceModelReference(owner="tiiuae", repo=name),
+            HuggingFaceModelReference(owner="nomic-ai", repo=name),
             ModelType.causal,
         )
 

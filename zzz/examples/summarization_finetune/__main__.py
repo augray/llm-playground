@@ -38,13 +38,11 @@ LORA_CONFIG_FLAN = LoraConfig(
     base_model_name_or_path="",
 )
 
-LORA_CONFIG_FALCON = replace(
+LORA_CONFIG_GPT_J = replace(
     LORA_CONFIG_FLAN,
     target_modules=[
-        "query_key_value",
-        "dense",
-        "dense_h_to_4h",
-        "dense_4h_to_h",
+        "q_proj",
+        "v_proj",
     ],
     task_type="CAUSAL_LM",
     base_model_name_or_path="",
@@ -214,7 +212,7 @@ def parse_args() -> Tuple[
     args = parser.parse_args()
 
     lora_config = replace(
-        LORA_CONFIG_FLAN if args.model_selection.is_flan() else LORA_CONFIG_FALCON,
+        LORA_CONFIG_FLAN if args.model_selection.is_flan() else LORA_CONFIG_GPT_J,
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,

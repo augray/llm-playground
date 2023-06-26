@@ -4,6 +4,7 @@ datasets
 huggingface-hub
 nvidia-cusparse-cu11
 peft
+scipy
 torch<=2.0.0
 transformers
 trl

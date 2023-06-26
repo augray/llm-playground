@@ -84,13 +84,13 @@ _GPTJ_PROPS = ModelProperties(
     model_type=ModelType.causal,
     pad_token="eos_token",
     # trust_remote_code=True,
-    torch_dtype=torch.bfloat16,
-    bits_and_bytes_config=BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=False,
-    ),
+    # torch_dtype=torch.bfloat16,
+    # bits_and_bytes_config=BitsAndBytesConfig(
+    #     load_in_4bit=True,
+    #     bnb_4bit_quant_type="nf4",
+    #     bnb_4bit_compute_dtype=torch.bfloat16,
+    #     bnb_4bit_use_double_quant=False,
+    # ),
 )
 
 _MODEL_PROPERTIES = {
@@ -99,8 +99,7 @@ _MODEL_PROPERTIES = {
     ModelSelection.flan_large: _FLAN_PROPS,
     ModelSelection.flan_xl: _FLAN_PROPS,
     ModelSelection.flan_xxl: _FLAN_PROPS,
-    ModelSelection.falcon_7b: _FALCON_PROPS,
-    ModelSelection.falcon_40b: _FALCON_PROPS,
+    ModelSelection.gpt4all_j: _GPTJ_PROPS,
 }
 
 
@@ -157,10 +156,14 @@ def load_model(model_name):
 
     model = auto_model_type.from_pretrained(
         model_name,
-        device_map="auto",
+        # device_map="auto",
+        device_map={'transformer.wte': 0, 'transformer.drop': 0, 'transformer.h.0': 0, 'transformer.h.1': 0, 'transformer.h.2': 0, 'transformer.h.3': 0, 'transformer.h.4': 0, 'transformer.h.5': 0, 'transformer.h.6': 0, 'transformer.h.7': 0, 'transformer.h.8': 0, 'transformer.h.9': 0, 'transformer.h.10': 0, 'transformer.h.11': 0, 'transformer.h.12': 0, 'transformer.h.13': 0, 'transformer.h.14': 0, 'transformer.h.15': 0, 'transformer.h.16': 0, 'transformer.h.17': 0, 'transformer.h.18': 0, 'transformer.h.19': 0, 'transformer.h.20': 0, 'transformer.h.21': 0, 'transformer.h.22': 0, 'transformer.h.23': 0, 'transformer.h.24': 0, 'transformer.h.25': 0, 'transformer.h.26': 0, 'transformer.h.27': 0, 'transformer.ln_f': 0, 'lm_head': 0},
         trust_remote_code=model_props.trust_remote_code,
         quantization_config=model_props.bits_and_bytes_config,
     )
+
+    print(model.hf_device_map)
+    
     return model
 
 
@@ -192,7 +195,7 @@ def _seq_2_seq_preprocess_function(examples, tokenizer, dataset_config):
     max_length = dataset_config.max_input_length
     output_token_max_length = dataset_config.max_output_length
     inputs = [
-        f"*Please summarize*: {ctx}. *Summary*: " for ctx in examples[text_column]
+        f"**Please summarize**: {ctx}. **Summary**: " for ctx in examples[text_column]
     ]
     targets = [target for target in examples[label_column]]
     model_inputs = tokenizer(
@@ -285,6 +288,8 @@ def train(
     training_args = train_config.training_arguments.to_hugging_face()
     model = load_model(model_name)
     if model_properties.model_type is ModelType.causal:
+        import pdb; pdb.set_trace()
+        model.tie_weights()
         trainer = SFTTrainer(
             model=model,
             args=training_args,
