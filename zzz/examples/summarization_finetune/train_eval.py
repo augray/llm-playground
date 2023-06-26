@@ -51,8 +51,7 @@ class ModelSelection(Enum):
     flan_large = "flan_large"
     flan_xl = "flan_xl"
     flan_xxl = "flan_xxl"
-    falcon_7b = "falcon_7b"
-    falcon_40b = "falcon_40b"
+    gpt4all_j = "gpt4all_j"
 
     @classmethod
     def from_model_reference(cls, ref: HuggingFaceModelReference) -> "ModelSelection":
@@ -81,10 +80,10 @@ class ModelProperties:
 
 
 _FLAN_PROPS = ModelProperties(model_type=ModelType.seq_to_seq)
-_FALCON_PROPS = ModelProperties(
+_GPTJ_PROPS = ModelProperties(
     model_type=ModelType.causal,
     pad_token="eos_token",
-    trust_remote_code=True,
+    # trust_remote_code=True,
     torch_dtype=torch.bfloat16,
     bits_and_bytes_config=BitsAndBytesConfig(
         load_in_4bit=True,
