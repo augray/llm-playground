@@ -47,7 +47,7 @@ def pick_model(model: ModelSelection) -> Tuple[HuggingFaceModelReference, ModelT
     else:
         name = model.value.replace("_", "-")
         return (
-            HuggingFaceModelReference(owner="nomic-ai", repo=name),
+            HuggingFaceModelReference(owner="EleutherAI", repo=name),
             ModelType.causal,
         )
 
@@ -74,7 +74,9 @@ def train(
         eval_data,
         tokenizer,
     )
-    return StoredModel.store(model, training_config.storage_directory)
+    stored_model = StoredModel.store(model, training_config.storage_directory, base_model_reference=model_reference)
+    import pdb; pdb.set_trace()
+    return stored_model
 
 
 @sematic.func
@@ -83,7 +85,8 @@ def eval(
     eval_data: Dataset,
     tokenizer: PreTrainedTokenizerBase,
 ) -> EvaluationResults:
-    return evaluate(model.load(), eval_data, tokenizer)
+    import pdb; pdb.set_trace()
+    return evaluate(model.load(device_map="auto", offload_dir="temp/offload"), eval_data, tokenizer)
 
 
 @sematic.func

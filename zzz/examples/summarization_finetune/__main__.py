@@ -55,7 +55,7 @@ TRAINING_ARGS = TrainingArguments(
     gradient_accumulation_steps=1,
     auto_find_batch_size=True,
     num_train_epochs=1,
-    save_steps=100,
+    save_strategy="epoch",
     save_total_limit=8,
     logging_steps=100,
 )

@@ -1,12 +1,15 @@
 # Standard Library
 from dataclasses import asdict, dataclass, replace
 from enum import Enum, unique
-from typing import List, Optional, Tuple, Type, Any, Union
+from typing import Dict, List, Optional, Tuple, Type, Any, Union
 
 # Third-party
+from accelerate import init_empty_weights, load_checkpoint_and_dispatch, infer_auto_device_map
 from datasets import Dataset, load_dataset
+from huggingface_hub import hf_hub_download
 from peft import LoraConfig, PeftModelForSeq2SeqLM, get_peft_model
 from transformers import (
+    AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -39,6 +42,14 @@ class LogMetricsCallback(TrainerCallback):
             log_metric(metric, value)
 
 
+class SftPeftCallback(TrainerCallback):
+    def __init__(self):
+        self.model = None
+        super().__init__()
+    
+    def on_save(self, args, state, control, **kwargs):
+        self.model = kwargs["model"]
+
 @unique
 class ModelType(Enum):
     seq_to_seq = "seq_to_seq"
@@ -51,7 +62,7 @@ class ModelSelection(Enum):
     flan_large = "flan_large"
     flan_xl = "flan_xl"
     flan_xxl = "flan_xxl"
-    gpt4all_j = "gpt4all_j"
+    gpt_j_6b = "gpt_j_6b"
 
     @classmethod
     def from_model_reference(cls, ref: HuggingFaceModelReference) -> "ModelSelection":
@@ -74,23 +85,16 @@ class ModelSelection(Enum):
 class ModelProperties:
     model_type: ModelType
     pad_token: Optional[str] = None
-    trust_remote_code: bool = False
-    torch_dtype: Optional[torch.dtype] = None
-    bits_and_bytes_config: Optional[BitsAndBytesConfig] = None
+    load_in_8bit: bool = False
+    device_map: Optional[Union[str, Dict[str, Any]]] = "auto"
 
 
 _FLAN_PROPS = ModelProperties(model_type=ModelType.seq_to_seq)
 _GPTJ_PROPS = ModelProperties(
     model_type=ModelType.causal,
     pad_token="eos_token",
-    # trust_remote_code=True,
-    # torch_dtype=torch.bfloat16,
-    # bits_and_bytes_config=BitsAndBytesConfig(
-    #     load_in_4bit=True,
-    #     bnb_4bit_quant_type="nf4",
-    #     bnb_4bit_compute_dtype=torch.bfloat16,
-    #     bnb_4bit_use_double_quant=False,
-    # ),
+    device_map=None,
+    load_in_8bit=True,
 )
 
 _MODEL_PROPERTIES = {
@@ -99,7 +103,7 @@ _MODEL_PROPERTIES = {
     ModelSelection.flan_large: _FLAN_PROPS,
     ModelSelection.flan_xl: _FLAN_PROPS,
     ModelSelection.flan_xxl: _FLAN_PROPS,
-    ModelSelection.gpt4all_j: _GPTJ_PROPS,
+    ModelSelection.gpt_j_6b: _GPTJ_PROPS,
 }
 
 
@@ -112,7 +116,7 @@ class TrainingArguments:
     gradient_accumulation_steps: int
     auto_find_batch_size: bool
     num_train_epochs: int
-    save_steps: int
+    save_strategy: str
     save_total_limit: int
     logging_steps: int
 
@@ -148,7 +152,6 @@ def load_model(model_name):
     model_props = _MODEL_PROPERTIES[ModelSelection.from_model_reference(
         HuggingFaceModelReference.from_string(model_name)
     )]
-
     auto_model_type = (
         AutoModelForSeq2SeqLM if model_props.model_type is ModelType.seq_to_seq
         else AutoModelForCausalLM
@@ -156,13 +159,9 @@ def load_model(model_name):
 
     model = auto_model_type.from_pretrained(
         model_name,
-        # device_map="auto",
-        device_map={'transformer.wte': 0, 'transformer.drop': 0, 'transformer.h.0': 0, 'transformer.h.1': 0, 'transformer.h.2': 0, 'transformer.h.3': 0, 'transformer.h.4': 0, 'transformer.h.5': 0, 'transformer.h.6': 0, 'transformer.h.7': 0, 'transformer.h.8': 0, 'transformer.h.9': 0, 'transformer.h.10': 0, 'transformer.h.11': 0, 'transformer.h.12': 0, 'transformer.h.13': 0, 'transformer.h.14': 0, 'transformer.h.15': 0, 'transformer.h.16': 0, 'transformer.h.17': 0, 'transformer.h.18': 0, 'transformer.h.19': 0, 'transformer.h.20': 0, 'transformer.h.21': 0, 'transformer.h.22': 0, 'transformer.h.23': 0, 'transformer.h.24': 0, 'transformer.h.25': 0, 'transformer.h.26': 0, 'transformer.h.27': 0, 'transformer.ln_f': 0, 'lm_head': 0},
-        trust_remote_code=model_props.trust_remote_code,
-        quantization_config=model_props.bits_and_bytes_config,
+        device_map=model_props.device_map,
+        load_in_8bit=model_props.load_in_8bit,
     )
-
-    print(model.hf_device_map)
     
     return model
 
@@ -288,8 +287,7 @@ def train(
     training_args = train_config.training_arguments.to_hugging_face()
     model = load_model(model_name)
     if model_properties.model_type is ModelType.causal:
-        import pdb; pdb.set_trace()
-        model.tie_weights()
+        saver = SftPeftCallback()
         trainer = SFTTrainer(
             model=model,
             args=training_args,
@@ -299,8 +297,11 @@ def train(
             tokenizer=tokenizer,
             packing=False,
             dataset_text_field="text",
-            callbacks=[LogMetricsCallback()],
+            callbacks=[LogMetricsCallback(), saver],
         )
+        model.config.use_cache = False
+        trainer.train()
+        model = saver.model
     else:
         model = get_peft_model(model, train_config.lora_config)
         trainer = Trainer(
@@ -310,8 +311,9 @@ def train(
             eval_dataset=eval_data,
             callbacks=[LogMetricsCallback()],
         )
-    model.config.use_cache = False
-    trainer.train()
+        model.config.use_cache = False
+        trainer.train()
+
     return model
 
 
