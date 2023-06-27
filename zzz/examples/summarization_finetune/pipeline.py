@@ -75,7 +75,6 @@ def train(
         tokenizer,
     )
     stored_model = StoredModel.store(model, training_config.storage_directory, base_model_reference=model_reference)
-    import pdb; pdb.set_trace()
     return stored_model
 
 
@@ -84,9 +83,9 @@ def eval(
     model: StoredModel,
     eval_data: Dataset,
     tokenizer: PreTrainedTokenizerBase,
+    model_type: ModelType,
 ) -> EvaluationResults:
-    import pdb; pdb.set_trace()
-    return evaluate(model.load(device_map="auto", offload_dir="temp/offload"), eval_data, tokenizer)
+    return evaluate(model.load(device_map="auto", offload_folder="temp/offload"), eval_data, tokenizer, model_type)
 
 
 @sematic.func
@@ -132,7 +131,7 @@ def pipeline(
     tokenizer = load_tokenizer(model_ref)
     train_data, test_data = prepare_datasets(dataset_config, tokenizer, model_type)
     model = train(model_ref, training_config, train_data, test_data, tokenizer)
-    eval_results = eval(model, test_data, tokenizer)
+    eval_results = eval(model, test_data, tokenizer, model_type)
 
     exported_model_reference = None
     if export_reference is not None:

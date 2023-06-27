@@ -35,6 +35,9 @@ from sematic.types import (
 )
 
 
+_SUMMARY_START_INDICATOR = "**Summary**: "
+
+
 class LogMetricsCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         log_metric("step", state.global_step)
@@ -182,7 +185,7 @@ def _causal_preprocess_function(examples, tokenizer, dataset_config):
     max_length = dataset_config.max_input_length
     output_token_max_length = dataset_config.max_output_length
     inputs = [
-        f"**Please summarize**: {ctx}. **Summary**: {summary} **End**"
+        f"**Please summarize**: {ctx}. {_SUMMARY_START_INDICATOR}{summary} **End**"
         for ctx, summary in zip(examples[text_column], examples[label_column])
     ]
     return {"text": inputs}
@@ -317,18 +320,45 @@ def train(
     return model
 
 
+def extract_prompt(text: str) -> str:
+    summary_start_start = text.index(_SUMMARY_START_INDICATOR)
+    if summary_start_start < 0:
+        # no summary start indicator found. Treat as unstructured.
+        return f"{text} {_SUMMARY_START_INDICATOR}"
+    return text[:summary_start_start + len(_SUMMARY_START_INDICATOR)]
+
+
 def evaluate(
     model: PeftModelForSeq2SeqLM,
     eval_dataset: Dataset,
     tokenizer: PreTrainedTokenizerBase,
+    model_type: ModelType,
 ) -> EvaluationResults:
+    import pdb; pdb.set_trace()
     model.eval()
     results: List[Tuple[str, str]] = []
     model.config.use_cache = True
-    eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    if model_type is ModelType.seq_to_seq:
+        eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+        eval_column = "input_ids"
+    else:
+        eval_dataset.set_format(type="torch", columns=["text"])
+        eval_column = "text"
+
+        def extract_prompts(examples):
+            prompts = [extract_prompt(ex) for ex in examples["text"]]
+            return {"text": prompts}
+        
+        eval_dataset = eval_dataset.map(
+            extract_prompt,
+            batched=True,
+            num_proc=1,
+            desc="Extracting eval prompts",
+        )
+        
     for i, row in enumerate(eval_dataset.iter(batch_size=1)):
         print(f"Eval sample {i}")
-        eval_tokens = row["input_ids"]
+        eval_tokens = row[eval_column]
         input_text = tokenizer.batch_decode(
             eval_tokens.detach().cpu().numpy(), skip_special_tokens=True
         )
