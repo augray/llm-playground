@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass, replace
 from enum import Enum, unique
 from typing import Dict, List, Optional, Tuple, Type, Any, Union
+import time
 
 # Third-party
 from accelerate import init_empty_weights, load_checkpoint_and_dispatch, infer_auto_device_map
@@ -36,7 +37,6 @@ from sematic.types import (
 
 
 _SUMMARY_START_INDICATOR = "**Summary**: "
-
 
 class LogMetricsCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
@@ -184,10 +184,24 @@ def _causal_preprocess_function(examples, tokenizer, dataset_config):
     label_column = dataset_config.summary_column
     max_length = dataset_config.max_input_length
     output_token_max_length = dataset_config.max_output_length
+
+    # We need to make sure the prompt to summarize
+    # doesn't get truncated out. Rule of thumb is
+    # that there are roughly 4 English chars per token
+    # on average. So the number of chars should be
+    # truncated to be a little less than 4x the max
+    # number of tokens, with enough space for
+    # the Summarize prompt. We can go with 3.5x to
+    # provide some margin for error.
+    def trim_context(context):
+        return context[:int(3.5 * max_length)  - len(_SUMMARY_START_INDICATOR)]
+    
     inputs = [
-        f"**Please summarize**: {ctx}. {_SUMMARY_START_INDICATOR}{summary} **End**"
+        f"**Please summarize**: {trim_context(ctx)}. "
+        f"{_SUMMARY_START_INDICATOR}{summary} **End**"
         for ctx, summary in zip(examples[text_column], examples[label_column])
     ]
+
     return {"text": inputs}
 
 
@@ -328,37 +342,50 @@ def extract_prompt(text: str) -> str:
     return text[:summary_start_start + len(_SUMMARY_START_INDICATOR)]
 
 
+def _run_eval_tokenizer(examples, tokenizer):
+    inputs = examples["text"]
+    model_inputs = tokenizer(
+        inputs,
+        max_length=500,
+        padding="max_length",
+        truncation=True,
+        return_tensors="pt",
+    )
+    return model_inputs
+
+
 def evaluate(
     model: PeftModelForSeq2SeqLM,
     eval_dataset: Dataset,
     tokenizer: PreTrainedTokenizerBase,
     model_type: ModelType,
 ) -> EvaluationResults:
-    import pdb; pdb.set_trace()
     model.eval()
     results: List[Tuple[str, str]] = []
     model.config.use_cache = True
     if model_type is ModelType.seq_to_seq:
         eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
-        eval_column = "input_ids"
     else:
-        eval_dataset.set_format(type="torch", columns=["text"])
-        eval_column = "text"
-
-        def extract_prompts(examples):
-            prompts = [extract_prompt(ex) for ex in examples["text"]]
-            return {"text": prompts}
-        
         eval_dataset = eval_dataset.map(
-            extract_prompt,
-            batched=True,
+            lambda example: {"text": extract_prompt(example["text"])},
+            batched=False,
             num_proc=1,
             desc="Extracting eval prompts",
         )
+        eval_dataset = eval_dataset.map(
+            lambda examples: _run_eval_tokenizer(examples, tokenizer),
+            batched=True,
+            num_proc=1,
+            remove_columns=["text"],
+            desc="Tokenizing eval prompts",
+        )
+        eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
         
+    started = time.time()
     for i, row in enumerate(eval_dataset.iter(batch_size=1)):
-        print(f"Eval sample {i}")
-        eval_tokens = row[eval_column]
+        seconds_since_start = int(time.time() - started)
+        print(f"Eval sample {i} (after {seconds_since_start} s)")
+        eval_tokens = row["input_ids"]
         input_text = tokenizer.batch_decode(
             eval_tokens.detach().cpu().numpy(), skip_special_tokens=True
         )
@@ -366,6 +393,12 @@ def evaluate(
         output_text = tokenizer.batch_decode(
             output_tokens.detach().cpu().numpy(), skip_special_tokens=True
         )
+        if model_type is ModelType.causal:
+            # Causal ML models extend the input. In our case, we want to
+            # consider the "response" to only be the new part, not counting
+            # the input.
+            output_text = [output_text[0].replace(input_text[0], "", 1)]
+        print(f"Output text:\n {output_text}")
         results.append(
             PromptResponse(sanitize(input_text[0]), sanitize(output_text[0]))
         )

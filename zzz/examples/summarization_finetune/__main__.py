@@ -81,8 +81,8 @@ DATASET_CONFIG = DatasetConfig(
 def main():
     switch_env("user")
 
-    training_config, dataset_config, export_reference = parse_args()
-    resolver = LocalResolver()
+    training_config, dataset_config, export_reference, cache_namespace = parse_args()
+    resolver = LocalResolver(cache_namespace=cache_namespace)
     model_tag = training_config.model_selection.name.replace("_", "-")
     future = pipeline(training_config, dataset_config, export_reference).set(
         name="Summarization Fine-Tuning",
@@ -92,7 +92,7 @@ def main():
 
 
 def parse_args() -> Tuple[
-    TrainingConfig, DatasetConfig, Optional[HuggingFaceModelReference]
+    TrainingConfig, DatasetConfig, Optional[HuggingFaceModelReference], str
 ]:
     parser = argparse.ArgumentParser("Hugging Face Summarization Example")
     selection_options = ", ".join([selection.name.replace("_", "-") for selection in ModelSelection])
@@ -209,6 +209,12 @@ def parse_args() -> Tuple[
             "Should be done on first script execution."
         ),
     )
+    parser.add_argument(
+        "--cache-namespace",
+        type=str,
+        default=None,
+        help="Namespace under which cached values will be stored and retrieved.",
+    )
     args = parser.parse_args()
 
     lora_config = replace(
@@ -251,7 +257,7 @@ def parse_args() -> Tuple[
     if args.login:
         login()
 
-    return training_config, dataset_config, export_model_reference
+    return training_config, dataset_config, export_model_reference, args.cache_namespace
 
 
 if __name__ == "__main__":

@@ -52,14 +52,14 @@ def pick_model(model: ModelSelection) -> Tuple[HuggingFaceModelReference, ModelT
         )
 
 
-@sematic.func
+@sematic.func(cache=True)
 def load_tokenizer(
     model_reference: HuggingFaceModelReference,
 ) -> PreTrainedTokenizerBase:
     return do_load_tokenizer(model_reference.to_string())
 
 
-@sematic.func
+@sematic.func(cache=True)
 def train(
     model_reference: HuggingFaceModelReference,
     training_config: TrainingConfig,
@@ -88,7 +88,7 @@ def eval(
     return evaluate(model.load(device_map="auto", offload_folder="temp/offload"), eval_data, tokenizer, model_type)
 
 
-@sematic.func
+@sematic.func(cache=True)
 def prepare_datasets(
     dataset_config: DatasetConfig,
     tokenizer: PreTrainedTokenizerBase,
@@ -106,7 +106,7 @@ def export(
     return export_model(model.load(), push_model_ref)
 
 
-@sematic.func
+@sematic.func(cache=True)
 def summarize(
     source_model: HuggingFaceModelReference,
     trained_model: StoredModel,
