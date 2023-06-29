@@ -182,22 +182,9 @@ def load_tokenizer(model_name) -> PreTrainedTokenizerBase:
 def _causal_preprocess_function(examples, tokenizer, dataset_config):
     text_column = dataset_config.text_column
     label_column = dataset_config.summary_column
-    max_length = dataset_config.max_input_length
-    output_token_max_length = dataset_config.max_output_length
-
-    # We need to make sure the prompt to summarize
-    # doesn't get truncated out. Rule of thumb is
-    # that there are roughly 4 English chars per token
-    # on average. So the number of chars should be
-    # truncated to be a little less than 4x the max
-    # number of tokens, with enough space for
-    # the Summarize prompt. We can go with 3.5x to
-    # provide some margin for error.
-    def trim_context(context):
-        return context[:int(3.5 * max_length)  - len(_SUMMARY_START_INDICATOR)]
     
     inputs = [
-        f"**Please summarize**: {trim_context(ctx)}. "
+        f"**Please summarize**: {ctx}. "
         f"{_SUMMARY_START_INDICATOR}{summary} **End**"
         for ctx, summary in zip(examples[text_column], examples[label_column])
     ]
@@ -288,6 +275,7 @@ def prepare_data(
     )
     train_dataset = processed_datasets["train"]
     eval_dataset = processed_datasets["validation"]
+
     return train_dataset, eval_dataset
 
 
@@ -334,19 +322,34 @@ def train(
     return model
 
 
-def extract_prompt(text: str) -> str:
-    summary_start_start = text.index(_SUMMARY_START_INDICATOR)
-    if summary_start_start < 0:
-        # no summary start indicator found. Treat as unstructured.
-        return f"{text} {_SUMMARY_START_INDICATOR}"
-    return text[:summary_start_start + len(_SUMMARY_START_INDICATOR)]
+def extract_prompt(text: str, max_tokens: int) -> str:
+    # We need to make sure the prompt to summarize
+    # doesn't get truncated out. Rule of thumb is
+    # that there are roughly 4 English chars per token
+    # on average. So the number of chars should be
+    # truncated to be a little less than 4x the max
+    # number of tokens, with enough space for
+    # the Summarize prompt. We can go with 3.5x to
+    # provide some margin for error.
+    def trim_context(context):
+        truncated = context[:int(3.5 * max_tokens) - len(_SUMMARY_START_INDICATOR)]
+        if truncated == context:
+            return context
+        
+        return truncated
+
+    summary_start_start = text.find(_SUMMARY_START_INDICATOR)
+    truncated = trim_context(text[:summary_start_start])
+    result = f"{truncated} {_SUMMARY_START_INDICATOR}"
+    print(result)
+    return result
 
 
-def _run_eval_tokenizer(examples, tokenizer):
+def _run_eval_tokenizer(examples, tokenizer, max_tokens):
     inputs = examples["text"]
     model_inputs = tokenizer(
         inputs,
-        max_length=500,
+        max_length=max_tokens,
         padding="max_length",
         truncation=True,
         return_tensors="pt",
@@ -359,27 +362,26 @@ def evaluate(
     eval_dataset: Dataset,
     tokenizer: PreTrainedTokenizerBase,
     model_type: ModelType,
+    dataset_config: DatasetConfig,
 ) -> EvaluationResults:
     model.eval()
     results: List[Tuple[str, str]] = []
     model.config.use_cache = True
-    if model_type is ModelType.seq_to_seq:
-        eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
-    else:
+    if model_type is ModelType.causal:
         eval_dataset = eval_dataset.map(
-            lambda example: {"text": extract_prompt(example["text"])},
+            lambda example: {"text": extract_prompt(example["text"], dataset_config.max_input_length)},
             batched=False,
             num_proc=1,
             desc="Extracting eval prompts",
         )
         eval_dataset = eval_dataset.map(
-            lambda examples: _run_eval_tokenizer(examples, tokenizer),
+            lambda examples: _run_eval_tokenizer(examples, tokenizer, dataset_config.max_input_length),
             batched=True,
             num_proc=1,
             remove_columns=["text"],
             desc="Tokenizing eval prompts",
         )
-        eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    eval_dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
         
     started = time.time()
     for i, row in enumerate(eval_dataset.iter(batch_size=1)):
@@ -389,7 +391,11 @@ def evaluate(
         input_text = tokenizer.batch_decode(
             eval_tokens.detach().cpu().numpy(), skip_special_tokens=True
         )
-        output_tokens = model.generate(input_ids=eval_tokens, max_new_tokens=500)
+        output_tokens = model.generate(
+            input_ids=eval_tokens,
+            max_new_tokens=dataset_config.max_output_length,
+            pad_token_id=tokenizer.pad_token_id,
+        )
         output_text = tokenizer.batch_decode(
             output_tokens.detach().cpu().numpy(), skip_special_tokens=True
         )

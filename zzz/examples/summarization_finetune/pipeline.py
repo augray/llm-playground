@@ -84,8 +84,9 @@ def eval(
     eval_data: Dataset,
     tokenizer: PreTrainedTokenizerBase,
     model_type: ModelType,
+    dataset_config: DatasetConfig,
 ) -> EvaluationResults:
-    return evaluate(model.load(device_map="auto", offload_folder="temp/offload"), eval_data, tokenizer, model_type)
+    return evaluate(model.load(device_map="auto", offload_folder="temp/offload"), eval_data, tokenizer, model_type, dataset_config)
 
 
 @sematic.func(cache=True)
@@ -131,7 +132,7 @@ def pipeline(
     tokenizer = load_tokenizer(model_ref)
     train_data, test_data = prepare_datasets(dataset_config, tokenizer, model_type)
     model = train(model_ref, training_config, train_data, test_data, tokenizer)
-    eval_results = eval(model, test_data, tokenizer, model_type)
+    eval_results = eval(model, test_data, tokenizer, model_type, dataset_config)
 
     exported_model_reference = None
     if export_reference is not None:
